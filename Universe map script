@@ -1,0 +1,174 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+
+-- ===== CONFIG =====
+local RANGE = 75
+local UPDATE_DELAY = 0.25
+local MAP_W, MAP_H = 220, 140
+local SCALE = 0.25
+local SHOW_PARTS = true
+-- ==================
+
+-- GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "UniverseMiniMap"
+gui.ResetOnSpawn = false
+gui.Parent = player.PlayerGui
+
+local map = Instance.new("Frame")
+map.Parent = gui
+map.Size = UDim2.fromOffset(MAP_W, MAP_H)
+map.Position = UDim2.fromOffset(15, 15)
+map.BackgroundColor3 = Color3.fromRGB(20,20,20)
+map.BorderSizePixel = 2
+map.Active = true
+map.Draggable = true
+map.ClipsDescendants = true
+
+-- Player dot
+local playerDot = Instance.new("Frame")
+playerDot.Size = UDim2.fromOffset(7,7)
+playerDot.AnchorPoint = Vector2.new(0.5,0.5)
+playerDot.BackgroundColor3 = Color3.fromRGB(0,255,0)
+playerDot.BorderSizePixel = 0
+playerDot.Parent = map
+
+-- UI buttons
+local function makeButton(text, pos)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(50,18)
+	b.Position = pos
+	b.Text = text
+	b.TextSize = 12
+	b.BackgroundColor3 = Color3.fromRGB(40,40,40)
+	b.TextColor3 = Color3.new(1,1,1)
+	b.BorderSizePixel = 0
+	b.Parent = map
+	return b
+end
+
+local btnRange = makeButton("R:75", UDim2.fromOffset(5,5))
+local btnParts = makeButton("Parts:On", UDim2.fromOffset(60,5))
+local btnZoomIn = makeButton("+", UDim2.fromOffset(120,5))
+local btnZoomOut = makeButton("-", UDim2.fromOffset(170,5))
+
+-- Dots
+local dots = {}
+
+local function clearDots()
+	for _,d in ipairs(dots) do d:Destroy() end
+	dots = {}
+end
+
+local function createDot(color, pos, size)
+	local dot = Instance.new("Frame")
+	dot.AnchorPoint = Vector2.new(0.5,0.5)
+	dot.Size = UDim2.fromOffset(size,size)
+	dot.Position = pos
+	dot.BackgroundColor3 = color
+	dot.BorderSizePixel = 0
+	dot.Parent = map
+	table.insert(dots, dot)
+end
+
+local function worldToMap(worldPos, origin)
+	local off = (worldPos - origin) * SCALE
+	return UDim2.fromOffset(
+		MAP_W/2 + off.X,
+		MAP_H/2 + off.Z
+	)
+end
+
+-- Controls
+btnRange.MouseButton1Click:Connect(function()
+	if RANGE == 50 then RANGE = 75
+	elseif RANGE == 75 then RANGE = 100
+	else RANGE = 50 end
+	btnRange.Text = "R:"..RANGE
+end)
+
+btnParts.MouseButton1Click:Connect(function()
+	SHOW_PARTS = not SHOW_PARTS
+	btnParts.Text = SHOW_PARTS and "Parts:On" or "Parts:Off"
+end)
+
+btnZoomIn.MouseButton1Click:Connect(function()
+	SCALE = math.clamp(SCALE + 0.05, 0.1, 1)
+end)
+
+btnZoomOut.MouseButton1Click:Connect(function()
+	SCALE = math.clamp(SCALE - 0.05, 0.1, 1)
+end)
+
+-- Click mark
+map.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local mark = Instance.new("Frame")
+		mark.Size = UDim2.fromOffset(6,6)
+		mark.AnchorPoint = Vector2.new(0.5,0.5)
+		mark.Position = UDim2.fromScale(
+			(input.Position.X - map.AbsolutePosition.X) / MAP_W,
+			(input.Position.Y - map.AbsolutePosition.Y) / MAP_H
+		)
+		mark.BackgroundColor3 = Color3.fromRGB(255,255,0)
+		mark.BorderSizePixel = 0
+		mark.Parent = map
+		task.delay(2, function() mark:Destroy() end)
+	end
+end)
+
+-- MAIN LOOP
+task.spawn(function()
+	while true do
+		task.wait(UPDATE_DELAY)
+
+		local char = player.Character
+		if not char then continue end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if not root then continue end
+
+		clearDots()
+		playerDot.Position = UDim2.fromOffset(MAP_W/2, MAP_H/2)
+
+		-- Players
+		for _,plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and plr.Character then
+				local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					local dist = (hrp.Position - root.Position).Magnitude
+					if dist <= RANGE then
+						local color = Color3.fromRGB(255,0,0)
+						if plr.Team and player.Team and plr.Team == player.Team then
+							color = Color3.fromRGB(0,170,255)
+						end
+						createDot(color, worldToMap(hrp.Position, root.Position), 6)
+					end
+				end
+			end
+		end
+
+		-- NPC + Parts
+		local params = OverlapParams.new()
+		params.FilterDescendantsInstances = {char}
+		params.FilterType = Enum.RaycastFilterType.Blacklist
+
+		for _,p in ipairs(Workspace:GetPartBoundsInRadius(root.Position, RANGE, params)) do
+			if not p:IsA("BasePart") then continue end
+			if p.Size.Magnitude > 60 then continue end
+
+			local model = p:FindFirstAncestorOfClass("Model")
+			local hum = model and model:FindFirstChildOfClass("Humanoid")
+			local isPlayer = hum and Players:GetPlayerFromCharacter(model)
+
+			if hum and not isPlayer then
+				local hostile = model:FindFirstChild("Hostile") or model:FindFirstChild("Attack")
+				local npcColor = hostile and Color3.fromRGB(255,105,180) or Color3.fromRGB(170,0,255)
+				createDot(npcColor, worldToMap(p.Position, root.Position), 6)
+			elseif SHOW_PARTS and not hum then
+				createDot(p.Color, worldToMap(p.Position, root.Position), 3)
+			end
+		end
+	end
+end)
